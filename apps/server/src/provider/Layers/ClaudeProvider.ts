@@ -17,10 +17,7 @@ import {
   getProviderOptionCurrentValue,
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
-import {
-  buildClaudeCompatibleProviderModelRows,
-  isLegacyClaudeCustomProviderModelSlug,
-} from "@t3tools/shared/claudeCustomProviders";
+import { isLegacyClaudeCustomProviderModelSlug } from "@t3tools/shared/claudeCustomProviders";
 import {
   query as claudeQuery,
   type SlashCommand as ClaudeSlashCommand,
@@ -658,7 +655,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     PROVIDER,
     filterClaudeCustomModels(claudeSettings.customModels),
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  ).concat(buildClaudeCompatibleProviderModelRows(claudeSettings));
+  );
 
   if (!claudeSettings.enabled) {
     return buildServerProvider({
@@ -747,7 +744,7 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
     PROVIDER,
     filterClaudeCustomModels(claudeSettings.customModels),
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  ).concat(buildClaudeCompatibleProviderModelRows(claudeSettings));
+  );
   const opus47UpgradeMessage = supportsClaudeOpus47(parsedVersion)
     ? undefined
     : formatClaudeOpus47UpgradeMessage(parsedVersion);
@@ -860,7 +857,7 @@ const makePendingClaudeProvider = (claudeSettings: ClaudeSettings): ServerProvid
     PROVIDER,
     filterClaudeCustomModels(claudeSettings.customModels),
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  ).concat(buildClaudeCompatibleProviderModelRows(claudeSettings));
+  );
 
   if (!claudeSettings.enabled) {
     return buildServerProvider({

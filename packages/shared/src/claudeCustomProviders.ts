@@ -199,7 +199,7 @@ export function buildClaudeCompatibleProviderModelRows(
 ): ReadonlyArray<ServerProviderModel> {
   const models: ServerProviderModel[] = [];
 
-  const sortedProviders = [...CLAUDE_COMPATIBLE_PROVIDER_CATALOG].sort((left, right) =>
+  const sortedProviders = CLAUDE_COMPATIBLE_PROVIDER_CATALOG.toSorted((left, right) =>
     left.name.localeCompare(right.name),
   );
 
@@ -218,7 +218,6 @@ export function buildClaudeCompatibleProviderModelRows(
         slug: makeClaudeCompatibleProviderModelSlug(provider.id, model.id),
         name: `${provider.name} · ${model.name}`,
         shortName: model.name,
-        subProvider: provider.name,
         isCustom: false,
         capabilities: EMPTY_CAPABILITIES,
       });

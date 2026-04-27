@@ -522,7 +522,6 @@ describe("ProviderModelPicker", () => {
         );
         expect(trigger?.textContent).toContain("GitHub Copilot");
         expect(trigger?.textContent).toContain("Opus 4.5");
-        expect(trigger?.textContent).not.toContain("GitHub Copilot · Opus 4.5");
       });
 
       await page.getByRole("button").click();

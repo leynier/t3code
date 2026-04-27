@@ -49,14 +49,6 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import {
-  buildClaudeCompatibleProviderEnv,
-  parseClaudeCompatibleProviderModelSlug,
-  resolveClaudeCompatibleProviderForModel,
-  type ClaudeCompatibleProviderAlias,
-  type ClaudeCompatibleProviderDefinition,
-  type ClaudeCompatibleProviderId,
-} from "@t3tools/shared/claudeCustomProviders";
-import {
   Cause,
   DateTime,
   Deferred,
@@ -91,11 +83,16 @@ import {
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 import {
-  defaultClaudeHistoryTransformer,
-  getClaudeCompatibleHistoryTransformer,
   rewriteSessionTranscript,
   type ClaudeCompatibleHistoryTransformer,
 } from "./claudeHistoryTransform.ts";
+import {
+  getClaudeProviderSwitchTransformer,
+  isClaudeCompatibleModelSelection,
+  resolveClaudeCompatibleRuntimeSelection,
+  type ClaudeCompatibleProviderId,
+  type ClaudeCompatibleRuntimeSelection,
+} from "./claudeCompatibleRuntime.ts";
 
 const PROVIDER = "claudeAgent" as const;
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
@@ -2116,6 +2113,15 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           },
         });
         return;
+      case "api_retry":
+        yield* offerRuntimeEvent({
+          ...base,
+          type: "account.rate-limits.updated",
+          payload: {
+            rateLimits: message,
+          },
+        });
+        return;
       case "compact_boundary":
         yield* offerRuntimeEvent({
           ...base,
@@ -2877,9 +2883,10 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
         input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
-      const compatibleProviderResolution = modelSelection
-        ? resolveClaudeCompatibleProviderForModel(claudeSettings, modelSelection.model)
-        : ({ kind: "none" } as const);
+      const compatibleProviderResolution = resolveClaudeCompatibleRuntimeSelection(
+        claudeSettings,
+        modelSelection,
+      );
       if (compatibleProviderResolution.kind === "stale") {
         return yield* new ProviderAdapterRequestError({
           provider: PROVIDER,
@@ -2889,8 +2896,10 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
       }
       const compatibleProviderSelection =
-        compatibleProviderResolution.kind === "resolved" ? compatibleProviderResolution : null;
-      const targetCompatibleProviderId = compatibleProviderSelection?.provider.id;
+        compatibleProviderResolution.kind === "resolved"
+          ? compatibleProviderResolution.selection
+          : null;
+      const targetCompatibleProviderId = compatibleProviderSelection?.providerId;
       const caps = getClaudeModelCapabilities(modelSelection?.model);
       const descriptors = getProviderOptionDescriptors({ caps });
       let apiModelId: string | undefined;
@@ -2899,16 +2908,14 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const compatibleProviderEnv = compatibleProviderSelection
         ? {
             ...process.env,
-            ...buildClaudeCompatibleProviderEnv(compatibleProviderSelection),
+            ...compatibleProviderSelection.env,
           }
         : undefined;
       if (
         existingResumeSessionId !== undefined &&
         resumeState?.compatibleProviderId !== targetCompatibleProviderId
       ) {
-        const transformer = targetCompatibleProviderId
-          ? getClaudeCompatibleHistoryTransformer(targetCompatibleProviderId)
-          : defaultClaudeHistoryTransformer;
+        const transformer = getClaudeProviderSwitchTransformer(targetCompatibleProviderId);
         const originalResumeSessionId = existingResumeSessionId;
         existingResumeSessionId = yield* Effect.tryPromise({
           try: () =>
@@ -2993,7 +3000,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.resume.compatible_provider_id": resumeState?.compatibleProviderId ?? "",
         "claude.query.cwd": input.cwd ?? "",
         "claude.query.model": apiModelId ?? "",
-        "claude.query.compatible_provider_id": compatibleProviderSelection?.provider.id ?? "",
+        "claude.query.compatible_provider_id": compatibleProviderSelection?.providerId ?? "",
         "claude.query.compatible_provider_alias": compatibleProviderSelection?.alias ?? "",
         "claude.query.compatible_provider_upstream_model":
           compatibleProviderSelection?.upstreamModel ?? "",
@@ -3093,8 +3100,8 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             ...(apiModelId ? { model: apiModelId } : {}),
             ...(compatibleProviderSelection
               ? {
-                  compatibleProviderId: compatibleProviderSelection.provider.id,
-                  compatibleProviderName: compatibleProviderSelection.provider.name,
+                  compatibleProviderId: compatibleProviderSelection.providerId,
+                  compatibleProviderName: compatibleProviderSelection.providerName,
                   compatibleProviderAlias: compatibleProviderSelection.alias,
                   compatibleProviderUpstreamModel: compatibleProviderSelection.upstreamModel,
                 }
@@ -3152,16 +3159,8 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const context = yield* requireSession(input.threadId);
     const modelSelection =
       input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
-    const incomingIsCompatibleSlug =
-      modelSelection !== undefined &&
-      parseClaudeCompatibleProviderModelSlug(modelSelection.model) !== null;
-    let compatibleProviderSelection: {
-      readonly provider: ClaudeCompatibleProviderDefinition;
-      readonly alias: ClaudeCompatibleProviderAlias;
-      readonly upstreamModel: string;
-      readonly modelName: string;
-    } | null = null;
-    if (incomingIsCompatibleSlug) {
+    let compatibleProviderSelection: ClaudeCompatibleRuntimeSelection | null = null;
+    if (isClaudeCompatibleModelSelection(modelSelection)) {
       const claudeSettings = yield* serverSettingsService.getSettings.pipe(
         Effect.map((settings) => settings.providers.claudeAgent),
         Effect.mapError(
@@ -3174,9 +3173,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
             }),
         ),
       );
-      const resolution = modelSelection
-        ? resolveClaudeCompatibleProviderForModel(claudeSettings, modelSelection.model)
-        : ({ kind: "none" } as const);
+      const resolution = resolveClaudeCompatibleRuntimeSelection(claudeSettings, modelSelection);
       if (resolution.kind === "stale") {
         return yield* new ProviderAdapterRequestError({
           provider: PROVIDER,
@@ -3186,7 +3183,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         });
       }
       if (resolution.kind === "resolved") {
-        compatibleProviderSelection = resolution;
+        compatibleProviderSelection = resolution.selection;
       }
     }
 

@@ -61,6 +61,7 @@ import {
 } from "../composerFooterLayout";
 import { type ComposerPromptEditorHandle, ComposerPromptEditor } from "../ComposerPromptEditor";
 import { ProviderModelPicker } from "./ProviderModelPicker";
+import type { ModelEsque } from "./providerIconUtils";
 import { type ComposerCommandItem, ComposerCommandMenu } from "./ComposerCommandMenu";
 import { ComposerPendingApprovalActions } from "./ComposerPendingApprovalActions";
 import { CompactComposerControlsMenu } from "./CompactComposerControlsMenu";
@@ -100,6 +101,7 @@ import {
   getProviderModels,
   resolveSelectableProvider,
 } from "../../providerModels";
+import { getCustomModelOptionsByProvider } from "../../modelSelection";
 import type { UnifiedSettings } from "@t3tools/contracts/settings";
 import type { SessionPhase, Thread } from "../../types";
 import type { PendingUserInputDraftAnswer } from "../../pendingUserInput";
@@ -619,18 +621,15 @@ export const ChatComposer = memo(
       [selectedModel, selectedModelOptionsForDispatch, selectedProvider],
     );
     const selectedModelForPicker = selectedModel;
-    const modelOptionsByProvider = useMemo<
-      Record<ProviderKind, ReadonlyArray<ServerProvider["models"][number]>>
-    >(
-      () => ({
-        codex: providerStatuses.find((provider) => provider.provider === "codex")?.models ?? [],
-        claudeAgent:
-          providerStatuses.find((provider) => provider.provider === "claudeAgent")?.models ?? [],
-        opencode:
-          providerStatuses.find((provider) => provider.provider === "opencode")?.models ?? [],
-        cursor: providerStatuses.find((provider) => provider.provider === "cursor")?.models ?? [],
-      }),
-      [providerStatuses],
+    const modelOptionsByProvider = useMemo<Record<ProviderKind, ReadonlyArray<ModelEsque>>>(
+      () =>
+        getCustomModelOptionsByProvider(
+          settings,
+          providerStatuses,
+          selectedProvider,
+          selectedModelForPicker,
+        ),
+      [providerStatuses, selectedModelForPicker, selectedProvider, settings],
     );
     const selectedModelForPickerWithCustomFallback = useMemo(() => {
       const currentOptions = modelOptionsByProvider[selectedProvider];

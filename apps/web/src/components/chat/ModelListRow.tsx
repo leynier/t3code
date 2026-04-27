@@ -68,7 +68,7 @@ export const ModelListRow = memo(function ModelListRow(props: {
         <div className="flex items-center justify-between gap-2 min-w-0">
           <div className="text-xs font-medium leading-snug flex items-center gap-2 min-w-0">
             <span className="truncate">
-              {props.useTriggerLabel
+              {props.useTriggerLabel && props.model.subProvider
                 ? getTriggerDisplayModelLabel(props.model)
                 : getDisplayModelName(
                     props.model,

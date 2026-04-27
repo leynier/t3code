@@ -14,10 +14,10 @@ import { ModelPickerContent } from "./ModelPickerContent";
 import {
   ModelEsque,
   PROVIDER_ICON_BY_PROVIDER,
+  getTriggerDisplayModelLabel,
   getTriggerDisplayModelName,
 } from "./providerIconUtils";
 import { setModelPickerOpen } from "../../modelPickerOpenState";
-import { parseClaudeCompatibleProviderModelSlug } from "@t3tools/shared/claudeCustomProviders";
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   provider: ProviderKind;
@@ -48,11 +48,9 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     selectedProviderOptions[0];
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
   const triggerTitle = selectedModel ? getTriggerDisplayModelName(selectedModel) : props.model;
-  const triggerSubtitle =
-    activeProvider === "claudeAgent" && parseClaudeCompatibleProviderModelSlug(selectedModel?.slug)
-      ? undefined
-      : selectedModel?.subProvider;
-  const triggerText = triggerSubtitle ? `${triggerSubtitle} ${triggerTitle}` : triggerTitle;
+  const triggerSubtitle = selectedModel?.subProvider;
+  const triggerLabel = selectedModel ? getTriggerDisplayModelLabel(selectedModel) : props.model;
+  const triggerText = triggerSubtitle ? `${triggerSubtitle} · ${triggerTitle}` : triggerTitle;
 
   const setIsMenuOpen = (open: boolean) => {
     props.onOpenChange?.(open);
@@ -112,11 +110,11 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           />
           <Tooltip>
             <TooltipTrigger
-              render={<span className={cn("min-w-0 flex-1 overflow-hidden", "truncate")} />}
+              render={<span className={cn("min-w-0 flex-1 overflow-hidden truncate")} />}
             >
               {triggerText}
             </TooltipTrigger>
-            <TooltipPopup side="top">{triggerText}</TooltipPopup>
+            <TooltipPopup side="top">{triggerLabel}</TooltipPopup>
           </Tooltip>
           <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
         </span>

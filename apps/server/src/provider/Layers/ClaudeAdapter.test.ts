@@ -877,6 +877,77 @@ describe("ClaudeAdapterLive", () => {
     );
   });
 
+  it.effect("maps Claude api retry system messages to rate limit telemetry", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+
+      const runtimeEventsFiber = yield* Stream.take(adapter.streamEvents, 6).pipe(
+        Stream.runCollect,
+        Effect.forkChild,
+      );
+
+      const session = yield* adapter.startSession({
+        threadId: THREAD_ID,
+        provider: "claudeAgent",
+        runtimeMode: "full-access",
+      });
+
+      yield* adapter.sendTurn({
+        threadId: session.threadId,
+        input: "hello",
+        attachments: [],
+      });
+
+      harness.query.emit({
+        type: "system",
+        subtype: "api_retry",
+        attempt: 1,
+        max_retries: 10,
+        retry_delay_ms: 500,
+        error_status: 429,
+        error: "rate_limit",
+        session_id: "sdk-session-1",
+        uuid: "api-retry-1",
+      } as unknown as SDKMessage);
+
+      const runtimeEvents = Array.from(yield* Fiber.join(runtimeEventsFiber));
+      assert.deepEqual(
+        runtimeEvents.map((event) => event.type),
+        [
+          "session.started",
+          "session.configured",
+          "session.state.changed",
+          "turn.started",
+          "thread.started",
+          "account.rate-limits.updated",
+        ],
+      );
+      assert.equal(
+        runtimeEvents.some((event) => event.type === "runtime.warning"),
+        false,
+      );
+
+      const retryEvent = runtimeEvents.find(
+        (event) => event.type === "account.rate-limits.updated",
+      );
+      assert.deepEqual(retryEvent?.payload.rateLimits, {
+        type: "system",
+        subtype: "api_retry",
+        attempt: 1,
+        max_retries: 10,
+        retry_delay_ms: 500,
+        error_status: 429,
+        error: "rate_limit",
+        session_id: "sdk-session-1",
+        uuid: "api-retry-1",
+      });
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
   it.effect("maps Claude reasoning deltas, streamed tool inputs, and tool results", () => {
     const harness = makeHarness();
     return Effect.gen(function* () {
