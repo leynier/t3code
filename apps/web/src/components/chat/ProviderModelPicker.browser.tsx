@@ -436,10 +436,10 @@ describe("ProviderModelPicker", () => {
           "Claude Sonnet 4.6",
           "Claude Opus 4.6",
           "Claude Haiku 4.5",
+          "Kimi · Kimi K2.6",
+          "MiniMax · MiniMax M2.7",
           "Z.ai · GLM 5.1",
           "Z.ai · GLM 5 Turbo",
-          "MiniMax · MiniMax M2.7",
-          "Kimi · Kimi K2.6",
         ]);
       });
     } finally {
