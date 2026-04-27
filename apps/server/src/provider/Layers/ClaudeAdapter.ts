@@ -49,6 +49,14 @@ import {
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
 import {
+  buildClaudeCompatibleProviderEnv,
+  parseClaudeCompatibleProviderModelSlug,
+  resolveClaudeCompatibleProviderForModel,
+  type ClaudeCompatibleProviderAlias,
+  type ClaudeCompatibleProviderDefinition,
+  type ClaudeCompatibleProviderId,
+} from "@t3tools/shared/claudeCustomProviders";
+import {
   Cause,
   DateTime,
   Deferred,
@@ -82,6 +90,12 @@ import {
 } from "../Errors.ts";
 import { ClaudeAdapter, type ClaudeAdapterShape } from "../Services/ClaudeAdapter.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  defaultClaudeHistoryTransformer,
+  getClaudeCompatibleHistoryTransformer,
+  rewriteSessionTranscript,
+  type ClaudeCompatibleHistoryTransformer,
+} from "./claudeHistoryTransform.ts";
 
 const PROVIDER = "claudeAgent" as const;
 type ClaudeTextStreamKind = Extract<RuntimeContentStreamKind, "assistant_text" | "reasoning_text">;
@@ -105,6 +119,7 @@ interface ClaudeResumeState {
   readonly resume?: string;
   readonly resumeSessionAt?: string;
   readonly turnCount?: number;
+  readonly compatibleProviderId?: ClaudeCompatibleProviderId;
 }
 
 interface ClaudeTurnState {
@@ -157,6 +172,7 @@ interface ClaudeSessionContext {
   readonly startedAt: string;
   readonly basePermissionMode: PermissionMode | undefined;
   currentApiModelId: string | undefined;
+  currentClaudeCompatibleProviderId: ClaudeCompatibleProviderId | undefined;
   resumeSessionId: string | undefined;
   readonly pendingApprovals: Map<ApprovalRequestId, PendingApproval>;
   readonly pendingUserInputs: Map<ApprovalRequestId, PendingUserInput>;
@@ -186,6 +202,11 @@ export interface ClaudeAdapterLiveOptions {
     readonly prompt: AsyncIterable<SDKUserMessage>;
     readonly options: ClaudeQueryOptions;
   }) => ClaudeQueryRuntime;
+  readonly rewriteSessionTranscript?: (input: {
+    readonly originalSessionId: string;
+    readonly transformer: ClaudeCompatibleHistoryTransformer;
+    readonly dir?: string;
+  }) => Promise<string>;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
 }
@@ -377,6 +398,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     sessionId?: unknown;
     resumeSessionAt?: unknown;
     turnCount?: unknown;
+    compatibleProviderId?: unknown;
   };
 
   const threadIdCandidate = typeof cursor.threadId === "string" ? cursor.threadId : undefined;
@@ -394,6 +416,12 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
   const resumeSessionAt =
     typeof cursor.resumeSessionAt === "string" ? cursor.resumeSessionAt : undefined;
   const turnCountValue = typeof cursor.turnCount === "number" ? cursor.turnCount : undefined;
+  const compatibleProviderId =
+    cursor.compatibleProviderId === "zai" ||
+    cursor.compatibleProviderId === "minimax" ||
+    cursor.compatibleProviderId === "kimi"
+      ? cursor.compatibleProviderId
+      : undefined;
 
   return {
     ...(threadId ? { threadId } : {}),
@@ -402,6 +430,7 @@ function readClaudeResumeState(resumeCursor: unknown): ClaudeResumeState | undef
     ...(turnCountValue !== undefined && Number.isInteger(turnCountValue) && turnCountValue >= 0
       ? { turnCount: turnCountValue }
       : {}),
+    ...(compatibleProviderId ? { compatibleProviderId } : {}),
   };
 }
 
@@ -986,6 +1015,18 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         prompt: input.prompt,
         options: input.options,
       }) as ClaudeQueryRuntime);
+  const rewriteClaudeSessionTranscript =
+    options?.rewriteSessionTranscript ??
+    ((input: {
+      readonly originalSessionId: string;
+      readonly transformer: ClaudeCompatibleHistoryTransformer;
+      readonly dir?: string;
+    }) =>
+      rewriteSessionTranscript(
+        input.originalSessionId,
+        input.transformer,
+        input.dir ? { dir: input.dir } : undefined,
+      ));
 
   const sessions = new Map<ThreadId, ClaudeSessionContext>();
   const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
@@ -1066,6 +1107,9 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       ...(context.resumeSessionId ? { resume: context.resumeSessionId } : {}),
       ...(context.lastAssistantUuid ? { resumeSessionAt: context.lastAssistantUuid } : {}),
       turnCount: context.turns.length,
+      ...(context.currentClaudeCompatibleProviderId
+        ? { compatibleProviderId: context.currentClaudeCompatibleProviderId }
+        : {}),
     };
 
     context.session = {
@@ -2509,10 +2553,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const startedAt = yield* nowIso;
       const resumeState = readClaudeResumeState(input.resumeCursor);
       const threadId = input.threadId;
-      const existingResumeSessionId = resumeState?.resume;
-      const newSessionId =
-        existingResumeSessionId === undefined ? yield* Random.nextUUIDv4 : undefined;
-      const sessionId = existingResumeSessionId ?? newSessionId;
+      let existingResumeSessionId = resumeState?.resume;
 
       const runtimeContext = yield* Effect.context<never>();
       const runFork = Effect.runForkWith(runtimeContext);
@@ -2836,9 +2877,58 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
       const extraArgs = parseCliArgs(claudeSettings.launchArgs).flags;
       const modelSelection =
         input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
+      const compatibleProviderResolution = modelSelection
+        ? resolveClaudeCompatibleProviderForModel(claudeSettings, modelSelection.model)
+        : ({ kind: "none" } as const);
+      if (compatibleProviderResolution.kind === "stale") {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "startSession/model",
+          detail:
+            "Selected Claude-compatible provider is not configured, is disabled, or does not map the selected model.",
+        });
+      }
+      const compatibleProviderSelection =
+        compatibleProviderResolution.kind === "resolved" ? compatibleProviderResolution : null;
+      const targetCompatibleProviderId = compatibleProviderSelection?.provider.id;
       const caps = getClaudeModelCapabilities(modelSelection?.model);
       const descriptors = getProviderOptionDescriptors({ caps });
-      const apiModelId = modelSelection ? resolveClaudeApiModelId(modelSelection) : undefined;
+      let apiModelId: string | undefined;
+      if (compatibleProviderSelection) apiModelId = compatibleProviderSelection.alias;
+      else if (modelSelection) apiModelId = resolveClaudeApiModelId(modelSelection);
+      const compatibleProviderEnv = compatibleProviderSelection
+        ? {
+            ...process.env,
+            ...buildClaudeCompatibleProviderEnv(compatibleProviderSelection),
+          }
+        : undefined;
+      if (
+        existingResumeSessionId !== undefined &&
+        resumeState?.compatibleProviderId !== targetCompatibleProviderId
+      ) {
+        const transformer = targetCompatibleProviderId
+          ? getClaudeCompatibleHistoryTransformer(targetCompatibleProviderId)
+          : defaultClaudeHistoryTransformer;
+        const originalResumeSessionId = existingResumeSessionId;
+        existingResumeSessionId = yield* Effect.tryPromise({
+          try: () =>
+            rewriteClaudeSessionTranscript({
+              originalSessionId: originalResumeSessionId,
+              transformer,
+              ...(input.cwd ? { dir: input.cwd } : {}),
+            }),
+          catch: (cause) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "startSession/rewriteTranscript",
+              detail: toMessage(cause, "Failed to rewrite Claude transcript for provider switch."),
+              cause,
+            }),
+        });
+      }
+      const newSessionId =
+        existingResumeSessionId === undefined ? yield* Random.nextUUIDv4 : undefined;
+      const sessionId = existingResumeSessionId ?? newSessionId;
       const rawEffort = getModelSelectionStringOptionValue(modelSelection, "effort");
       const effort = resolveClaudeEffort(caps, rawEffort) ?? null;
       const fastModeSupported = descriptors.some(
@@ -2885,7 +2975,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         ...(newSessionId ? { sessionId: newSessionId } : {}),
         includePartialMessages: true,
         canUseTool,
-        env: process.env,
+        env: compatibleProviderEnv ?? process.env,
         ...(input.cwd ? { additionalDirectories: [input.cwd] } : {}),
         ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {}),
       };
@@ -2900,8 +2990,13 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         "claude.resume.session_id": existingResumeSessionId ?? "",
         "claude.resume.session_at": resumeState?.resumeSessionAt ?? "",
         "claude.resume.turn_count": resumeState?.turnCount ?? -1,
+        "claude.resume.compatible_provider_id": resumeState?.compatibleProviderId ?? "",
         "claude.query.cwd": input.cwd ?? "",
         "claude.query.model": apiModelId ?? "",
+        "claude.query.compatible_provider_id": compatibleProviderSelection?.provider.id ?? "",
+        "claude.query.compatible_provider_alias": compatibleProviderSelection?.alias ?? "",
+        "claude.query.compatible_provider_upstream_model":
+          compatibleProviderSelection?.upstreamModel ?? "",
         "claude.query.effort": effectiveEffort ?? "",
         "claude.query.permission_mode": permissionMode ?? "",
         "claude.query.allow_dangerously_skip_permissions": permissionMode === "bypassPermissions",
@@ -2943,6 +3038,9 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
           ...(sessionId ? { resume: sessionId } : {}),
           ...(resumeState?.resumeSessionAt ? { resumeSessionAt: resumeState.resumeSessionAt } : {}),
           turnCount: resumeState?.turnCount ?? 0,
+          ...(targetCompatibleProviderId
+            ? { compatibleProviderId: targetCompatibleProviderId }
+            : {}),
         },
         createdAt: startedAt,
         updatedAt: startedAt,
@@ -2956,6 +3054,7 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         startedAt,
         basePermissionMode: permissionMode,
         currentApiModelId: apiModelId,
+        currentClaudeCompatibleProviderId: targetCompatibleProviderId,
         resumeSessionId: sessionId,
         pendingApprovals,
         pendingUserInputs,
@@ -2992,6 +3091,14 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
         payload: {
           config: {
             ...(apiModelId ? { model: apiModelId } : {}),
+            ...(compatibleProviderSelection
+              ? {
+                  compatibleProviderId: compatibleProviderSelection.provider.id,
+                  compatibleProviderName: compatibleProviderSelection.provider.name,
+                  compatibleProviderAlias: compatibleProviderSelection.alias,
+                  compatibleProviderUpstreamModel: compatibleProviderSelection.upstreamModel,
+                }
+              : {}),
             ...(input.cwd ? { cwd: input.cwd } : {}),
             ...(effectiveEffort ? { effort: effectiveEffort } : {}),
             ...(permissionMode ? { permissionMode } : {}),
@@ -3045,6 +3152,43 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     const context = yield* requireSession(input.threadId);
     const modelSelection =
       input.modelSelection?.provider === "claudeAgent" ? input.modelSelection : undefined;
+    const incomingIsCompatibleSlug =
+      modelSelection !== undefined &&
+      parseClaudeCompatibleProviderModelSlug(modelSelection.model) !== null;
+    let compatibleProviderSelection: {
+      readonly provider: ClaudeCompatibleProviderDefinition;
+      readonly alias: ClaudeCompatibleProviderAlias;
+      readonly upstreamModel: string;
+      readonly modelName: string;
+    } | null = null;
+    if (incomingIsCompatibleSlug) {
+      const claudeSettings = yield* serverSettingsService.getSettings.pipe(
+        Effect.map((settings) => settings.providers.claudeAgent),
+        Effect.mapError(
+          (error) =>
+            new ProviderAdapterRequestError({
+              provider: PROVIDER,
+              method: "turn/loadSettings",
+              detail: error.message,
+              cause: error,
+            }),
+        ),
+      );
+      const resolution = modelSelection
+        ? resolveClaudeCompatibleProviderForModel(claudeSettings, modelSelection.model)
+        : ({ kind: "none" } as const);
+      if (resolution.kind === "stale") {
+        return yield* new ProviderAdapterRequestError({
+          provider: PROVIDER,
+          method: "turn/setModel",
+          detail:
+            "Selected Claude-compatible provider is not configured, is disabled, or does not map the selected model.",
+        });
+      }
+      if (resolution.kind === "resolved") {
+        compatibleProviderSelection = resolution;
+      }
+    }
 
     if (context.turnState) {
       // Auto-close a stale synthetic turn (from background agent responses
@@ -3053,7 +3197,9 @@ const makeClaudeAdapter = Effect.fn("makeClaudeAdapter")(function* (
     }
 
     if (modelSelection?.model) {
-      const apiModelId = resolveClaudeApiModelId(modelSelection);
+      const apiModelId = compatibleProviderSelection
+        ? compatibleProviderSelection.alias
+        : resolveClaudeApiModelId(modelSelection);
       if (context.currentApiModelId !== apiModelId) {
         yield* Effect.tryPromise({
           try: () => context.query.setModel(apiModelId),

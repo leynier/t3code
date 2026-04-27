@@ -20,6 +20,12 @@ import {
 import { scopeThreadRef } from "@t3tools/client-runtime";
 import { DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { createModelSelection, normalizeModelSlug } from "@t3tools/shared/model";
+import {
+  CLAUDE_COMPATIBLE_PROVIDER_CATALOG,
+  buildClaudeCompatibleProviderModelRows,
+  isLegacyClaudeCustomProviderModelSlug,
+  parseClaudeCompatibleProviderModelSlug,
+} from "@t3tools/shared/claudeCustomProviders";
 import { Equal } from "effect";
 import { APP_VERSION } from "../../branding";
 import {
@@ -550,7 +556,11 @@ export function GeneralSettingsPanel() {
       settings.providers.claudeAgent.binaryPath !==
         DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.binaryPath ||
       settings.providers.claudeAgent.customModels.length > 0 ||
-      settings.providers.claudeAgent.launchArgs !== "",
+      settings.providers.claudeAgent.launchArgs !== "" ||
+      !Equal.equals(
+        settings.providers.claudeAgent.claudeCompatibleProviders,
+        DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent.claudeCompatibleProviders,
+      ),
     ),
     cursor: Boolean(
       settings.providers.cursor.binaryPath !==
@@ -777,14 +787,23 @@ export function GeneralSettingsPanel() {
     const defaultProviderConfig = DEFAULT_UNIFIED_SETTINGS.providers[providerSettings.provider];
     const statusKey = liveProvider?.status ?? (providerConfig.enabled ? "warning" : "disabled");
     const summary = getProviderSummary(liveProvider);
+    const customModelRows: ReadonlyArray<ServerProviderModel> = providerConfig.customModels.map(
+      (slug) => ({ slug, name: slug, isCustom: true, capabilities: null }),
+    );
     const models: ReadonlyArray<ServerProviderModel> =
       liveProvider?.models ??
-      providerConfig.customModels.map((slug) => ({
-        slug,
-        name: slug,
-        isCustom: true,
-        capabilities: null,
-      }));
+      (providerSettings.provider === "claudeAgent"
+        ? [
+            ...customModelRows,
+            ...buildClaudeCompatibleProviderModelRows(settings.providers.claudeAgent),
+          ]
+        : customModelRows);
+    const settingsModels =
+      providerSettings.provider === "claudeAgent"
+        ? models
+            .filter((model) => parseClaudeCompatibleProviderModelSlug(model.slug) === null)
+            .filter((model) => !isLegacyClaudeCustomProviderModelSlug(model.slug))
+        : models;
 
     return {
       provider: providerSettings.provider,
@@ -804,7 +823,7 @@ export function GeneralSettingsPanel() {
       serverPasswordValue: "serverPassword" in providerConfig ? providerConfig.serverPassword : "",
       isDirty: !Equal.equals(providerConfig, defaultProviderConfig),
       liveProvider,
-      models,
+      models: settingsModels,
       providerConfig,
       statusStyle: PROVIDER_STATUS_STYLES[statusKey],
       summary,
@@ -1457,34 +1476,171 @@ export function GeneralSettingsPanel() {
                     ) : null}
 
                     {providerCard.provider === "claudeAgent" ? (
-                      <div className="border-t border-border/60 px-4 py-3 sm:px-5">
-                        <label htmlFor="provider-install-claudeAgent-launch-args" className="block">
-                          <span className="text-xs font-medium text-foreground">
-                            Launch arguments
-                          </span>
-                          <Input
-                            id="provider-install-claudeAgent-launch-args"
-                            className="mt-1.5"
-                            value={settings.providers.claudeAgent.launchArgs}
-                            onChange={(event) =>
-                              updateSettings({
-                                providers: {
-                                  ...settings.providers,
-                                  claudeAgent: {
-                                    ...settings.providers.claudeAgent,
-                                    launchArgs: event.target.value,
+                      <>
+                        <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                          <label
+                            htmlFor="provider-install-claudeAgent-launch-args"
+                            className="block"
+                          >
+                            <span className="text-xs font-medium text-foreground">
+                              Launch arguments
+                            </span>
+                            <Input
+                              id="provider-install-claudeAgent-launch-args"
+                              className="mt-1.5"
+                              value={settings.providers.claudeAgent.launchArgs}
+                              onChange={(event) =>
+                                updateSettings({
+                                  providers: {
+                                    ...settings.providers,
+                                    claudeAgent: {
+                                      ...settings.providers.claudeAgent,
+                                      launchArgs: event.target.value,
+                                    },
                                   },
-                                },
-                              })
-                            }
-                            placeholder="e.g. --chrome"
-                            spellCheck={false}
-                          />
-                          <span className="mt-1 block text-xs text-muted-foreground">
-                            Additional CLI arguments passed to Claude Code on session start.
-                          </span>
-                        </label>
-                      </div>
+                                })
+                              }
+                              placeholder="e.g. --chrome"
+                              spellCheck={false}
+                            />
+                            <span className="mt-1 block text-xs text-muted-foreground">
+                              Additional CLI arguments passed to Claude Code on session start.
+                            </span>
+                          </label>
+                        </div>
+
+                        <div className="border-t border-border/60 px-4 py-3 sm:px-5">
+                          <div className="text-xs font-medium text-foreground">
+                            Claude-compatible providers
+                          </div>
+                          <p className="mt-1 text-xs text-muted-foreground">
+                            Configure credentials for fixed Claude Code compatible endpoints.
+                          </p>
+                          <div className="mt-3 flex gap-2 rounded-md border border-warning/24 bg-warning/6 px-2.5 py-2 text-xs text-muted-foreground">
+                            <InfoIcon className="mt-0.5 size-3.5 shrink-0 text-warning" />
+                            <span>
+                              Tokens and API keys are stored in plaintext in server settings.
+                            </span>
+                          </div>
+
+                          <div className="mt-3 space-y-2">
+                            {CLAUDE_COMPATIBLE_PROVIDER_CATALOG.map((compatibleProvider) => {
+                              const providerSettings =
+                                settings.providers.claudeAgent.claudeCompatibleProviders[
+                                  compatibleProvider.id
+                                ];
+                              const updateCompatibleProvider = (
+                                update: typeof providerSettings,
+                              ) => {
+                                updateSettings({
+                                  providers: {
+                                    ...settings.providers,
+                                    claudeAgent: {
+                                      ...settings.providers.claudeAgent,
+                                      claudeCompatibleProviders: {
+                                        ...settings.providers.claudeAgent.claudeCompatibleProviders,
+                                        [compatibleProvider.id]: update,
+                                      },
+                                    },
+                                  },
+                                });
+                              };
+
+                              return (
+                                <div
+                                  key={compatibleProvider.id}
+                                  className={cn(
+                                    "rounded-md border border-border/70 bg-background/70 p-3 shadow-xs/5",
+                                    !providerSettings.enabled && "bg-muted/20 opacity-72",
+                                  )}
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <Switch
+                                      checked={providerSettings.enabled}
+                                      onCheckedChange={(checked) =>
+                                        updateCompatibleProvider({
+                                          ...providerSettings,
+                                          enabled: Boolean(checked),
+                                        })
+                                      }
+                                      aria-label={`Enable ${compatibleProvider.name}`}
+                                    />
+                                    <div className="min-w-0 flex-1">
+                                      <div className="text-xs font-medium text-foreground">
+                                        {compatibleProvider.name}
+                                      </div>
+                                      <code className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                                        {compatibleProvider.baseUrl}
+                                      </code>
+                                    </div>
+                                  </div>
+
+                                  <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                                    <label className="block">
+                                      <span className="text-[11px] font-medium text-muted-foreground">
+                                        Auth token (optional)
+                                      </span>
+                                      <Input
+                                        className="mt-1 h-8"
+                                        type="password"
+                                        autoComplete="off"
+                                        value={providerSettings.authToken}
+                                        onChange={(event) =>
+                                          updateCompatibleProvider({
+                                            ...providerSettings,
+                                            authToken: event.target.value,
+                                          })
+                                        }
+                                        placeholder="ANTHROPIC_AUTH_TOKEN"
+                                        spellCheck={false}
+                                      />
+                                    </label>
+                                    <label className="block">
+                                      <span className="text-[11px] font-medium text-muted-foreground">
+                                        API key (optional)
+                                      </span>
+                                      <Input
+                                        className="mt-1 h-8"
+                                        type="password"
+                                        autoComplete="off"
+                                        value={providerSettings.apiKey}
+                                        onChange={(event) =>
+                                          updateCompatibleProvider({
+                                            ...providerSettings,
+                                            apiKey: event.target.value,
+                                          })
+                                        }
+                                        placeholder="ANTHROPIC_API_KEY"
+                                        spellCheck={false}
+                                      />
+                                    </label>
+                                  </div>
+
+                                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                                    {(["haiku", "sonnet", "opus"] as const).map((alias) => {
+                                      const modelId = compatibleProvider.modelAliases[alias];
+                                      const modelName =
+                                        compatibleProvider.models.find(
+                                          (model) => model.id === modelId,
+                                        )?.name ?? modelId;
+                                      return (
+                                        <div key={alias}>
+                                          <span className="text-[11px] font-medium capitalize text-muted-foreground">
+                                            {alias}
+                                          </span>
+                                          <div className="mt-1 rounded-md border border-border/60 bg-muted/20 px-2 py-1.5 text-xs text-foreground">
+                                            {modelName}
+                                          </div>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </>
                     ) : null}
 
                     <div className="border-t border-border/60 px-4 py-3 sm:px-5">

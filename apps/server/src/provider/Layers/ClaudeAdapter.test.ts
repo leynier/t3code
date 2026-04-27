@@ -135,6 +135,7 @@ class FakeClaudeQuery implements AsyncIterable<SDKMessage> {
 function makeHarness(config?: {
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: ClaudeAdapterLiveOptions["nativeEventLogger"];
+  readonly rewriteSessionTranscript?: ClaudeAdapterLiveOptions["rewriteSessionTranscript"];
   readonly cwd?: string;
   readonly baseDir?: string;
 }) {
@@ -151,6 +152,11 @@ function makeHarness(config?: {
       createInput = input;
       return query;
     },
+    ...(config?.rewriteSessionTranscript
+      ? {
+          rewriteSessionTranscript: config.rewriteSessionTranscript,
+        }
+      : {}),
     ...(config?.nativeEventLogger
       ? {
           nativeEventLogger: config.nativeEventLogger,
@@ -302,6 +308,82 @@ describe("ClaudeAdapterLive", () => {
       assert.deepEqual(createInput?.options.settingSources, ["user", "project", "local"]);
       assert.equal(createInput?.options.permissionMode, undefined);
       assert.equal(createInput?.options.allowDangerouslySkipPermissions, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect(
+    "starts fixed Claude-compatible providers with resolved alias model and scoped env",
+    () => {
+      const harness = makeHarness();
+      return Effect.gen(function* () {
+        const settings = yield* ServerSettingsService;
+        yield* settings.updateSettings({
+          providers: {
+            claudeAgent: {
+              claudeCompatibleProviders: {
+                zai: {
+                  enabled: true,
+                  authToken: "secret-token",
+                  apiKey: "",
+                },
+              },
+            },
+          },
+        });
+
+        const adapter = yield* ClaudeAdapter;
+        yield* adapter.startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          modelSelection: createModelSelection("claudeAgent", "claude-compatible/zai/glm-5.1"),
+          runtimeMode: "full-access",
+        });
+
+        const createInput = harness.getLastCreateQueryInput();
+        assert.equal(createInput?.options.model, "opus");
+        assert.equal(createInput?.options.thinking, undefined);
+        assert.deepEqual(createInput?.options.settings, undefined);
+        assert.equal(
+          createInput?.options.env?.ANTHROPIC_BASE_URL,
+          "https://api.z.ai/api/anthropic",
+        );
+        assert.equal(createInput?.options.env?.ANTHROPIC_AUTH_TOKEN, "secret-token");
+        assert.equal(createInput?.options.env?.ANTHROPIC_API_KEY, undefined);
+        assert.equal(createInput?.options.env?.ANTHROPIC_MODEL, "glm-5.1");
+        assert.equal(createInput?.options.env?.ANTHROPIC_DEFAULT_HAIKU_MODEL, "glm-5-turbo");
+        assert.equal(createInput?.options.env?.ANTHROPIC_DEFAULT_SONNET_MODEL, "glm-5.1");
+        assert.equal(createInput?.options.env?.ANTHROPIC_DEFAULT_OPUS_MODEL, "glm-5.1");
+      }).pipe(
+        Effect.provideService(Random.Random, makeDeterministicRandomService()),
+        Effect.provide(harness.layer),
+      );
+    },
+  );
+
+  it.effect("rejects stale Claude-compatible provider model slugs", () => {
+    const harness = makeHarness();
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const error = yield* adapter
+        .startSession({
+          threadId: THREAD_ID,
+          provider: "claudeAgent",
+          modelSelection: createModelSelection("claudeAgent", "claude-compatible/zai/missing"),
+          runtimeMode: "full-access",
+        })
+        .pipe(Effect.flip);
+
+      assert.equal(error._tag, "ProviderAdapterRequestError");
+      if (error._tag !== "ProviderAdapterRequestError") {
+        throw new Error("Unexpected error type");
+      }
+      assert.equal(
+        error.detail,
+        "Selected Claude-compatible provider is not configured, is disabled, or does not map the selected model.",
+      );
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),
@@ -2555,6 +2637,165 @@ describe("ClaudeAdapterLive", () => {
       assert.equal(createInput?.options.resume, "550e8400-e29b-41d4-a716-446655440000");
       assert.equal(createInput?.options.sessionId, undefined);
       assert.equal(createInput?.options.resumeSessionAt, undefined);
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("reuses same-provider Claude-compatible resume ids without rewriting", () => {
+    const rewriteCalls: Array<unknown> = [];
+    const harness = makeHarness({
+      rewriteSessionTranscript: async (input) => {
+        rewriteCalls.push(input);
+        return "550e8400-e29b-41d4-a716-446655440001";
+      },
+    });
+    return Effect.gen(function* () {
+      const settings = yield* ServerSettingsService;
+      yield* settings.updateSettings({
+        providers: {
+          claudeAgent: {
+            claudeCompatibleProviders: {
+              kimi: {
+                enabled: true,
+                authToken: "kimi-token",
+                apiKey: "",
+              },
+            },
+          },
+        },
+      });
+
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: "claudeAgent",
+        resumeCursor: {
+          threadId: RESUME_THREAD_ID,
+          resume: "550e8400-e29b-41d4-a716-446655440000",
+          compatibleProviderId: "kimi",
+          turnCount: 2,
+        },
+        modelSelection: createModelSelection("claudeAgent", "claude-compatible/kimi/kimi-k2.6"),
+        runtimeMode: "full-access",
+      });
+
+      assert.deepEqual(rewriteCalls, []);
+      assert.deepEqual(session.resumeCursor, {
+        threadId: RESUME_THREAD_ID,
+        resume: "550e8400-e29b-41d4-a716-446655440000",
+        turnCount: 2,
+        compatibleProviderId: "kimi",
+      });
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.resume, "550e8400-e29b-41d4-a716-446655440000");
+      assert.equal(createInput?.options.model, "opus");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("forks legacy Claude resume ids before switching to a compatible provider", () => {
+    const rewriteCalls: Array<{
+      readonly originalSessionId: string;
+      readonly dir?: string;
+    }> = [];
+    const harness = makeHarness({
+      cwd: "/tmp/claude-adapter-cross-provider",
+      rewriteSessionTranscript: async (input) => {
+        rewriteCalls.push({
+          originalSessionId: input.originalSessionId,
+          ...(input.dir ? { dir: input.dir } : {}),
+        });
+        return "550e8400-e29b-41d4-a716-446655440001";
+      },
+    });
+    return Effect.gen(function* () {
+      const settings = yield* ServerSettingsService;
+      yield* settings.updateSettings({
+        providers: {
+          claudeAgent: {
+            claudeCompatibleProviders: {
+              kimi: {
+                enabled: true,
+                authToken: "kimi-token",
+                apiKey: "",
+              },
+            },
+          },
+        },
+      });
+
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: "claudeAgent",
+        cwd: "/tmp/claude-adapter-cross-provider",
+        resumeCursor: {
+          threadId: RESUME_THREAD_ID,
+          resume: "550e8400-e29b-41d4-a716-446655440000",
+          turnCount: 2,
+        },
+        modelSelection: createModelSelection("claudeAgent", "claude-compatible/kimi/kimi-k2.6"),
+        runtimeMode: "full-access",
+      });
+
+      assert.deepEqual(rewriteCalls, [
+        {
+          originalSessionId: "550e8400-e29b-41d4-a716-446655440000",
+          dir: "/tmp/claude-adapter-cross-provider",
+        },
+      ]);
+      assert.deepEqual(session.resumeCursor, {
+        threadId: RESUME_THREAD_ID,
+        resume: "550e8400-e29b-41d4-a716-446655440001",
+        turnCount: 2,
+        compatibleProviderId: "kimi",
+      });
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.resume, "550e8400-e29b-41d4-a716-446655440001");
+      assert.equal(createInput?.options.model, "opus");
+      assert.equal(createInput?.options.env?.ANTHROPIC_BASE_URL, "https://api.kimi.com/coding/");
+    }).pipe(
+      Effect.provideService(Random.Random, makeDeterministicRandomService()),
+      Effect.provide(harness.layer),
+    );
+  });
+
+  it.effect("forks compatible-provider resume ids before returning to default Claude", () => {
+    const rewriteCalls: Array<string> = [];
+    const harness = makeHarness({
+      rewriteSessionTranscript: async (input) => {
+        rewriteCalls.push(input.originalSessionId);
+        return "550e8400-e29b-41d4-a716-446655440001";
+      },
+    });
+    return Effect.gen(function* () {
+      const adapter = yield* ClaudeAdapter;
+      const session = yield* adapter.startSession({
+        threadId: RESUME_THREAD_ID,
+        provider: "claudeAgent",
+        resumeCursor: {
+          threadId: RESUME_THREAD_ID,
+          resume: "550e8400-e29b-41d4-a716-446655440000",
+          compatibleProviderId: "kimi",
+          turnCount: 2,
+        },
+        runtimeMode: "full-access",
+      });
+
+      assert.deepEqual(rewriteCalls, ["550e8400-e29b-41d4-a716-446655440000"]);
+      assert.deepEqual(session.resumeCursor, {
+        threadId: RESUME_THREAD_ID,
+        resume: "550e8400-e29b-41d4-a716-446655440001",
+        turnCount: 2,
+      });
+      const createInput = harness.getLastCreateQueryInput();
+      assert.equal(createInput?.options.resume, "550e8400-e29b-41d4-a716-446655440001");
+      assert.equal(createInput?.options.model, undefined);
+      assert.equal(createInput?.options.env, process.env);
     }).pipe(
       Effect.provideService(Random.Random, makeDeterministicRandomService()),
       Effect.provide(harness.layer),

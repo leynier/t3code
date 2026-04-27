@@ -18,6 +18,10 @@ import {
   getProviderOptionDescriptors,
 } from "@t3tools/shared/model";
 import {
+  buildClaudeCompatibleProviderModelRows,
+  isLegacyClaudeCustomProviderModelSlug,
+} from "@t3tools/shared/claudeCustomProviders";
+import {
   query as claudeQuery,
   type SlashCommand as ClaudeSlashCommand,
   type SDKUserMessage,
@@ -182,6 +186,10 @@ const BUILT_IN_MODELS: ReadonlyArray<ServerProviderModel> = [
     }),
   },
 ];
+
+function filterClaudeCustomModels(customModels: ReadonlyArray<string>): ReadonlyArray<string> {
+  return customModels.filter((model) => !isLegacyClaudeCustomProviderModelSlug(model));
+}
 
 function supportsClaudeOpus47(version: string | null | undefined): boolean {
   return version ? compareCliVersions(version, MINIMUM_CLAUDE_OPUS_4_7_VERSION) >= 0 : false;
@@ -648,9 +656,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const allModels = providerModelsFromSettings(
     BUILT_IN_MODELS,
     PROVIDER,
-    claudeSettings.customModels,
+    filterClaudeCustomModels(claudeSettings.customModels),
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  );
+  ).concat(buildClaudeCompatibleProviderModelRows(claudeSettings));
 
   if (!claudeSettings.enabled) {
     return buildServerProvider({
@@ -737,9 +745,9 @@ export const checkClaudeProviderStatus = Effect.fn("checkClaudeProviderStatus")(
   const models = providerModelsFromSettings(
     getBuiltInClaudeModelsForVersion(parsedVersion),
     PROVIDER,
-    claudeSettings.customModels,
+    filterClaudeCustomModels(claudeSettings.customModels),
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  );
+  ).concat(buildClaudeCompatibleProviderModelRows(claudeSettings));
   const opus47UpgradeMessage = supportsClaudeOpus47(parsedVersion)
     ? undefined
     : formatClaudeOpus47UpgradeMessage(parsedVersion);
@@ -850,9 +858,9 @@ const makePendingClaudeProvider = (claudeSettings: ClaudeSettings): ServerProvid
   const models = providerModelsFromSettings(
     BUILT_IN_MODELS,
     PROVIDER,
-    claudeSettings.customModels,
+    filterClaudeCustomModels(claudeSettings.customModels),
     DEFAULT_CLAUDE_MODEL_CAPABILITIES,
-  );
+  ).concat(buildClaudeCompatibleProviderModelRows(claudeSettings));
 
   if (!claudeSettings.enabled) {
     return buildServerProvider({

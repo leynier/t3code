@@ -114,6 +114,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         binaryPath: "/usr/local/bin/claude",
         customModels: ["claude-custom"],
         launchArgs: "",
+        claudeCompatibleProviders:
+          DEFAULT_SERVER_SETTINGS.providers.claudeAgent.claudeCompatibleProviders,
       });
       assert.deepEqual(
         next.textGenerationModelSelection,
@@ -224,6 +226,8 @@ it.layer(NodeServices.layer)("server settings", (it) => {
         binaryPath: "/opt/homebrew/bin/claude",
         customModels: [],
         launchArgs: "",
+        claudeCompatibleProviders:
+          DEFAULT_SERVER_SETTINGS.providers.claudeAgent.claudeCompatibleProviders,
       });
       assert.deepEqual(next.providers.opencode, {
         enabled: true,

@@ -9,6 +9,7 @@ import { ProviderModelPicker } from "./ProviderModelPicker";
 import { getCustomModelOptionsByProvider } from "../../modelSelection";
 import { DEFAULT_CLIENT_SETTINGS, DEFAULT_UNIFIED_SETTINGS } from "@t3tools/contracts/settings";
 import { __resetLocalApiForTests } from "../../localApi";
+import { buildClaudeCompatibleProviderModelRows } from "@t3tools/shared/claudeCustomProviders";
 
 // Mock the environments/runtime module to provide a mock primary environment connection
 vi.mock("../../environments/runtime", () => {
@@ -435,6 +436,10 @@ describe("ProviderModelPicker", () => {
           "Claude Sonnet 4.6",
           "Claude Opus 4.6",
           "Claude Haiku 4.5",
+          "Z.ai · GLM 5.1",
+          "Z.ai · GLM 5 Turbo",
+          "MiniMax · MiniMax M2.7",
+          "Kimi · Kimi K2.6",
         ]);
       });
     } finally {
@@ -517,12 +522,50 @@ describe("ProviderModelPicker", () => {
         );
         expect(trigger?.textContent).toContain("GitHub Copilot");
         expect(trigger?.textContent).toContain("Opus 4.5");
+        expect(trigger?.textContent).not.toContain("GitHub Copilot · Opus 4.5");
       });
 
       await page.getByRole("button").click();
 
       await vi.waitFor(() => {
         expect(getVisibleModelNames()).toEqual(["GitHub Copilot · Opus 4.5"]);
+      });
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("omits the provider name from selected Claude-compatible model trigger labels", async () => {
+    const mounted = await mountPicker({
+      provider: "claudeAgent",
+      model: "claude-compatible/zai/glm-5.1",
+      lockedProvider: "claudeAgent",
+      providers: [
+        {
+          ...TEST_PROVIDERS[1]!,
+          models: [
+            ...TEST_PROVIDERS[1]!.models,
+            ...buildClaudeCompatibleProviderModelRows(
+              DEFAULT_UNIFIED_SETTINGS.providers.claudeAgent,
+            ),
+          ],
+        },
+      ],
+    });
+
+    try {
+      await vi.waitFor(() => {
+        const trigger = document.querySelector<HTMLElement>(
+          '[data-chat-provider-model-picker="true"]',
+        );
+        expect(trigger?.textContent).toContain("GLM 5.1");
+        expect(trigger?.textContent).not.toContain("Z.ai");
+      });
+
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        expect(getVisibleModelNames()).toContain("Z.ai · GLM 5.1");
       });
     } finally {
       await mounted.cleanup();

@@ -92,6 +92,23 @@ export const ClaudeSettings = Schema.Struct({
   binaryPath: makeBinaryPathSetting("claude"),
   customModels: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   launchArgs: Schema.String.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+  claudeCompatibleProviders: Schema.Struct({
+    zai: Schema.Struct({
+      enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+      authToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+      apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+    }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    minimax: Schema.Struct({
+      enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+      authToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+      apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+    }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    kimi: Schema.Struct({
+      enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+      authToken: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+      apiKey: TrimmedString.pipe(Schema.withDecodingDefault(Effect.succeed(""))),
+    }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
 });
 export type ClaudeSettings = typeof ClaudeSettings.Type;
 
@@ -203,6 +220,31 @@ const ClaudeSettingsPatch = Schema.Struct({
   binaryPath: Schema.optionalKey(Schema.String),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
   launchArgs: Schema.optionalKey(Schema.String),
+  claudeCompatibleProviders: Schema.optionalKey(
+    Schema.Struct({
+      zai: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          authToken: Schema.optionalKey(Schema.String),
+          apiKey: Schema.optionalKey(Schema.String),
+        }),
+      ),
+      minimax: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          authToken: Schema.optionalKey(Schema.String),
+          apiKey: Schema.optionalKey(Schema.String),
+        }),
+      ),
+      kimi: Schema.optionalKey(
+        Schema.Struct({
+          enabled: Schema.optionalKey(Schema.Boolean),
+          authToken: Schema.optionalKey(Schema.String),
+          apiKey: Schema.optionalKey(Schema.String),
+        }),
+      ),
+    }),
+  ),
 });
 
 const CursorSettingsPatch = Schema.Struct({

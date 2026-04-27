@@ -9,6 +9,11 @@ import {
   normalizeModelSlug,
   resolveSelectableModel,
 } from "@t3tools/shared/model";
+import {
+  buildClaudeCompatibleProviderModelRows,
+  isLegacyClaudeCustomProviderModelSlug,
+  parseClaudeCompatibleProviderModelSlug,
+} from "@t3tools/shared/claudeCustomProviders";
 import { getComposerProviderState } from "./components/chat/composerProviderState";
 import { UnifiedSettings } from "@t3tools/contracts/settings";
 import {
@@ -42,6 +47,9 @@ export function normalizeCustomModelSlugs(
     if (
       !normalized ||
       normalized.length > MAX_CUSTOM_MODEL_LENGTH ||
+      (provider === "claudeAgent" &&
+        (isLegacyClaudeCustomProviderModelSlug(normalized) ||
+          parseClaudeCompatibleProviderModelSlug(normalized) !== null)) ||
       builtInModelSlugs.has(normalized) ||
       seen.has(normalized)
     ) {
@@ -64,7 +72,13 @@ export function getAppModelOptions(
   provider: ProviderKind,
   selectedModel?: string | null,
 ): AppModelOption[] {
-  const options: AppModelOption[] = getProviderModels(providers, provider).map(
+  const providerModels = getProviderModels(providers, provider).filter(
+    (model) =>
+      provider !== "claudeAgent" ||
+      (!isLegacyClaudeCustomProviderModelSlug(model.slug) &&
+        parseClaudeCompatibleProviderModelSlug(model.slug) === null),
+  );
+  const options: AppModelOption[] = providerModels.map(
     ({ slug, name, shortName, subProvider, isCustom }) => ({
       slug,
       name,
@@ -74,11 +88,24 @@ export function getAppModelOptions(
     }),
   );
   const seen = new Set(options.map((option) => option.slug));
+  if (provider === "claudeAgent") {
+    for (const model of buildClaudeCompatibleProviderModelRows(
+      settings.providers.claudeAgent,
+    ).filter((model) => !isLegacyClaudeCustomProviderModelSlug(model.slug))) {
+      if (seen.has(model.slug)) continue;
+      seen.add(model.slug);
+      options.push({
+        slug: model.slug,
+        name: model.name,
+        ...(model.shortName ? { shortName: model.shortName } : {}),
+        ...(model.subProvider ? { subProvider: model.subProvider } : {}),
+        isCustom: model.isCustom,
+      });
+    }
+  }
   const trimmedSelectedModel = selectedModel?.trim().toLowerCase();
   const builtInModelSlugs = new Set(
-    getProviderModels(providers, provider)
-      .filter((model) => !model.isCustom)
-      .map((model) => model.slug),
+    providerModels.filter((model) => !model.isCustom).map((model) => model.slug),
   );
 
   const customModels = settings.providers[provider].customModels;
@@ -101,6 +128,8 @@ export function getAppModelOptions(
     options.some((option) => option.name.toLowerCase() === trimmedSelectedModel);
   if (
     normalizedSelectedModel &&
+    !isLegacyClaudeCustomProviderModelSlug(normalizedSelectedModel) &&
+    parseClaudeCompatibleProviderModelSlug(normalizedSelectedModel) === null &&
     !seen.has(normalizedSelectedModel) &&
     !selectedModelMatchesExistingName
   ) {

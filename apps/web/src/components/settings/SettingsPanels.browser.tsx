@@ -718,4 +718,44 @@ describe("GeneralSettingsPanel observability", () => {
     await expect.element(page.getByText("OpenCode server password")).toBeInTheDocument();
     await expect.element(page.getByPlaceholder("Server password")).toBeInTheDocument();
   });
+
+  it("lets users configure fixed Claude-compatible providers", async () => {
+    const updateSettings = vi.fn<LocalApi["server"]["updateSettings"]>().mockResolvedValue({
+      ...DEFAULT_SERVER_SETTINGS,
+      providers: {
+        ...DEFAULT_SERVER_SETTINGS.providers,
+        claudeAgent: {
+          ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
+          claudeCompatibleProviders: {
+            ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent.claudeCompatibleProviders,
+            kimi: {
+              enabled: true,
+              authToken: "secret",
+              apiKey: "",
+            },
+          },
+        },
+      },
+    });
+    window.nativeApi = {
+      server: {
+        updateSettings,
+      },
+    } as unknown as LocalApi;
+    setServerConfigSnapshot(createBaseServerConfig());
+
+    mounted = await render(
+      <AppAtomRegistryProvider>
+        <GeneralSettingsPanel />
+      </AppAtomRegistryProvider>,
+    );
+
+    await page.getByLabelText("Toggle Claude details").click();
+    await expect.element(page.getByText("Claude-compatible providers")).toBeInTheDocument();
+    await expect.element(page.getByText("https://api.kimi.com/coding/")).toBeInTheDocument();
+    await expect.element(page.getByText("Kimi K2.6").first()).toBeInTheDocument();
+
+    await page.getByPlaceholder("ANTHROPIC_AUTH_TOKEN").first().fill("secret");
+    expect(updateSettings).toHaveBeenCalled();
+  });
 });
