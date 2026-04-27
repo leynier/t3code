@@ -15,14 +15,63 @@ export interface ClaudeCompatibleHistoryTransformer {
   ) => ReadonlyArray<SessionMessage>;
 }
 
+function stripThinkingContentForClaude(messages: ReadonlyArray<SessionMessage>) {
+  let changed = false;
+  const transformed: SessionMessage[] = [];
+
+  for (const message of messages) {
+    const sdkMessage = message.message as {
+      readonly role?: unknown;
+      readonly content?: unknown;
+    };
+    if (sdkMessage.role !== "assistant" || !Array.isArray(sdkMessage.content)) {
+      transformed.push(message);
+      continue;
+    }
+
+    const content = sdkMessage.content.filter(
+      (block) =>
+        typeof block !== "object" ||
+        block === null ||
+        !("type" in block) ||
+        block.type !== "thinking",
+    );
+    if (content.length === sdkMessage.content.length) {
+      transformed.push(message);
+      continue;
+    }
+
+    changed = true;
+    if (content.length === 0) {
+      continue;
+    }
+
+    transformed.push({
+      ...message,
+      message: {
+        ...(message.message as object),
+        content,
+      },
+    });
+  }
+
+  return changed ? transformed : messages;
+}
+
 export const defaultClaudeHistoryTransformer: ClaudeCompatibleHistoryTransformer = {
+  transformHistory: stripThinkingContentForClaude,
+};
+
+const compatibleProviderHistoryTransformer: ClaudeCompatibleHistoryTransformer = {
   transformHistory: (messages) => messages,
 };
 
-const zaiHistoryTransformer: ClaudeCompatibleHistoryTransformer = defaultClaudeHistoryTransformer;
-const kimiHistoryTransformer: ClaudeCompatibleHistoryTransformer = defaultClaudeHistoryTransformer;
+const zaiHistoryTransformer: ClaudeCompatibleHistoryTransformer =
+  compatibleProviderHistoryTransformer;
+const kimiHistoryTransformer: ClaudeCompatibleHistoryTransformer =
+  compatibleProviderHistoryTransformer;
 const minimaxHistoryTransformer: ClaudeCompatibleHistoryTransformer =
-  defaultClaudeHistoryTransformer;
+  compatibleProviderHistoryTransformer;
 
 export function getClaudeCompatibleHistoryTransformer(
   providerId: ClaudeCompatibleProviderId,

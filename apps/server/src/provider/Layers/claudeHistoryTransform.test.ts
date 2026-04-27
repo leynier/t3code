@@ -13,6 +13,7 @@ const sdkMocks = vi.hoisted(() => ({
 vi.mock("@anthropic-ai/claude-agent-sdk", () => sdkMocks);
 
 import {
+  defaultClaudeHistoryTransformer,
   getClaudeCompatibleHistoryTransformer,
   rewriteSessionTranscript,
 } from "./claudeHistoryTransform.ts";
@@ -45,6 +46,35 @@ describe("claude history transform", () => {
     ];
 
     expect(getClaudeCompatibleHistoryTransformer("zai").transformHistory(messages)).toBe(messages);
+  });
+
+  it("strips incompatible thinking blocks when targeting default Claude", () => {
+    const messages = [
+      makeSessionMessage("user", "user-1", {
+        role: "user",
+        content: "hello",
+      }),
+      makeSessionMessage("assistant", "assistant-thinking-only", {
+        role: "assistant",
+        content: [{ type: "thinking", thinking: "hidden", signature: "minimax-signature" }],
+      }),
+      makeSessionMessage("assistant", "assistant-mixed", {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "hidden", signature: "minimax-signature" },
+          { type: "text", text: "visible" },
+        ],
+      }),
+    ];
+
+    const transformed = defaultClaudeHistoryTransformer.transformHistory(messages);
+
+    expect(transformed).toHaveLength(2);
+    expect(transformed.map((message) => message.uuid)).toEqual(["user-1", "assistant-mixed"]);
+    expect(transformed[1]?.message).toMatchObject({
+      role: "assistant",
+      content: [{ type: "text", text: "visible" }],
+    });
   });
 
   it("rewrites a forked transcript with transformed messages", async () => {

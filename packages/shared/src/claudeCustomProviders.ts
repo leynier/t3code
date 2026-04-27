@@ -199,7 +199,11 @@ export function buildClaudeCompatibleProviderModelRows(
 ): ReadonlyArray<ServerProviderModel> {
   const models: ServerProviderModel[] = [];
 
-  for (const provider of CLAUDE_COMPATIBLE_PROVIDER_CATALOG) {
+  const sortedProviders = [...CLAUDE_COMPATIBLE_PROVIDER_CATALOG].sort((left, right) =>
+    left.name.localeCompare(right.name),
+  );
+
+  for (const provider of sortedProviders) {
     const settings = getConfiguredProviderSettings(claudeSettings, provider.id);
     if (settings.enabled === false) continue;
 

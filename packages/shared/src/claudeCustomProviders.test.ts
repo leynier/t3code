@@ -49,10 +49,10 @@ describe("claude compatible provider helpers", () => {
 
   it("builds one selector row per fixed upstream model", () => {
     expect(buildClaudeCompatibleProviderModelRows(settings).map((model) => model.name)).toEqual([
+      "Kimi · Kimi K2.6",
+      "MiniMax · MiniMax M2.7",
       "Z.ai · GLM 5.1",
       "Z.ai · GLM 5 Turbo",
-      "MiniMax · MiniMax M2.7",
-      "Kimi · Kimi K2.6",
     ]);
   });
 
