@@ -39,6 +39,19 @@ export const ENVIRONMENT_MACHINE_KINDS = [
   "laptop",
   "mac-mini",
   "mac-studio",
+  "raspberry-pi",
+  "docker",
+  "macos",
+  "windows",
+  "wsl",
+  "debian",
+  "ubuntu",
+  "fedora",
+  "arch",
+  "mint",
+  "opensuse",
+  "nixos",
+  "alpine",
 ] as const;
 export const EnvironmentMachineKind = Schema.Literals(ENVIRONMENT_MACHINE_KINDS);
 export type EnvironmentMachineKind = typeof EnvironmentMachineKind.Type;
@@ -216,6 +229,10 @@ export const ExecutionEnvironmentCapabilities = Schema.Struct({
       setting. Older servers drop the key on write, so clients show the
       picker inert rather than offering a choice that would never stick. */
   environmentIcon: Schema.optionalKey(Schema.Boolean),
+  /** Machine kinds this server accepts for the `environmentIcon` setting.
+      Absent on servers that predate the OS and distribution kinds, which
+      reject a write naming any kind they do not know. */
+  environmentIconKinds: Schema.optionalKey(Schema.Array(Schema.String)),
   /** The desktop app supervising this server can be driven over RPC:
       server.updateServer runs its check -> download -> relaunch. Absent on
       desktop servers whose app predates the remote trigger, where clients

@@ -1,4 +1,5 @@
 import {
+  ENVIRONMENT_MACHINE_KINDS,
   EnvironmentId,
   ORCHESTRATION_PROTOCOL_VERSION,
   PROVIDER_SEND_TURN_MAX_FILE_BYTES,
@@ -256,6 +257,7 @@ export const make = Effect.gen(function* () {
       threadPullRequestLinking: true,
       serverResolvedCommandContext: true,
       environmentIcon: true,
+      environmentIconKinds: ENVIRONMENT_MACHINE_KINDS,
       projectCloneTracking: true,
       ...(serverSelfUpdate === null ? {} : { serverSelfUpdate }),
       ...(serverInstallation === null ? {} : { serverInstallation }),
